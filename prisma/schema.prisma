@@ -1,0 +1,315 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+
+  extensions = [uuid_ossp(map: "uuid-ossp")]
+}
+
+// -----------------------------------------------------------------------------
+// ENUMS
+// -----------------------------------------------------------------------------
+
+enum SystemRole {
+  USER
+  SUPER_ADMIN
+}
+
+enum TenantRole {
+  OWNER
+  ADMIN
+  RECRUITER
+  HIRING_MANAGER
+  INTERVIEWER
+}
+
+enum RequisitionStatus {
+  DRAFT
+  PENDING_APPROVAL
+  OPEN
+  FILLED
+  FROZEN
+  CANCELLED
+}
+
+enum PostingStatus {
+  DRAFT
+  PUBLISHED_EXTERNAL
+  PUBLISHED_INTERNAL
+  CLOSED
+}
+
+enum StageType {
+  SOURCED
+  APPLIED
+  SCREENING
+  ASSESSMENT
+  INTERVIEW
+  OFFER
+  HIRED
+  REJECTED
+}
+
+// -----------------------------------------------------------------------------
+// CORE IDENTITY & MULTI-TENANCY
+// -----------------------------------------------------------------------------
+
+model User {
+  id            String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  email         String    @unique
+  passwordHash  String?
+  firstName     String
+  lastName      String
+  systemRole    SystemRole @default(USER)
+  
+  // Seeker Profile basics 
+  headline      String?
+  resumeUrl     String?
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  tenantMemberships TenantMember[]
+  applications      Application[]
+  auditLogs         AuditLog[]
+}
+
+model Tenant {
+  id            String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  name          String
+  slug          String    @unique
+  domain        String?   @unique // Used to auto-join employees via email domain
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  members       TenantMember[]
+  departments   Department[]
+  requisitions  JobRequisition[]
+  workflows     HiringWorkflow[]
+  auditLogs     AuditLog[]
+}
+
+model TenantMember {
+  id            String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  userId        String    @db.Uuid
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenantId      String    @db.Uuid
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  role          TenantRole @default(INTERVIEWER)
+  title         String?
+  isActive      Boolean   @default(true)
+
+  // Relations
+  managedRequisitions JobRequisition[] @relation("HiringManager")
+  recruitedRequisitions JobRequisition[] @relation("Recruiter")
+  interviewsScheduled Interview[]      @relation("Interviewer")
+  scorecards          InterviewScorecard[]
+
+  @@unique([userId, tenantId])
+  @@index([tenantId, role])
+}
+
+model Department {
+  id            String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  tenantId      String    @db.Uuid
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name          String
+  
+  requisitions  JobRequisition[]
+
+  @@unique([tenantId, name])
+}
+
+// -----------------------------------------------------------------------------
+// ATS CORE: REQUISITIONS & POSTINGS
+// -----------------------------------------------------------------------------
+
+model JobRequisition {
+  id               String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  tenantId         String    @db.Uuid
+  tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  departmentId     String?   @db.Uuid
+  department       Department? @relation(fields: [departmentId], references: [id])
+  
+  // Internal Data
+  internalTitle    String
+  headcount        Int       @default(1)
+  budgetCurrency   String    @default("USD")
+  budgetMin        Int?
+  budgetMax        Int?
+  status           RequisitionStatus @default(DRAFT)
+  
+  // Stakeholders
+  hiringManagerId  String?   @db.Uuid
+  hiringManager    TenantMember? @relation("HiringManager", fields: [hiringManagerId], references: [id])
+  recruiterId      String?   @db.Uuid
+  recruiter        TenantMember? @relation("Recruiter", fields: [recruiterId], references: [id])
+  
+  // ATS Pipeline
+  workflowId       String?   @db.Uuid
+  workflow         HiringWorkflow? @relation(fields: [workflowId], references: [id])
+
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  // Relations
+  postings         JobPosting[]
+  applications     Application[]
+}
+
+model JobPosting {
+  id               String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  requisitionId    String    @db.Uuid
+  requisition      JobRequisition @relation(fields: [requisitionId], references: [id], onDelete: Cascade)
+  
+  // External Data
+  publicTitle      String
+  description      String    @db.Text
+  requirements     String    @db.Text
+  location         String
+  workMode         String    // ONSITE, HYBRID, REMOTE
+  status           PostingStatus @default(DRAFT)
+  
+  publishedAt      DateTime?
+  expiresAt        DateTime?
+
+  // Relations
+  applications     Application[]
+
+  @@index([status, publishedAt])
+}
+
+// -----------------------------------------------------------------------------
+// HIRING WORKFLOWS & PIPELINES
+// -----------------------------------------------------------------------------
+
+model HiringWorkflow {
+  id            String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  tenantId      String    @db.Uuid
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name          String    // e.g., "Standard Engineering Pipeline"
+  
+  stages        WorkflowStage[]
+  requisitions  JobRequisition[]
+}
+
+model WorkflowStage {
+  id            String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  workflowId    String    @db.Uuid
+  workflow      HiringWorkflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  
+  name          String    // e.g., "Technical Phone Screen"
+  type          StageType
+  orderIndex    Int       // Defines the sequence of the pipeline
+  
+  transitions   ApplicationTransition[]
+  interviews    Interview[]
+
+  @@index([workflowId, orderIndex])
+}
+
+// -----------------------------------------------------------------------------
+// CANDIDATE TRACKING (ATS)
+// -----------------------------------------------------------------------------
+
+model Application {
+  id               String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  candidateId      String    @db.Uuid
+  candidate        User      @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  
+  requisitionId    String    @db.Uuid
+  requisition      JobRequisition @relation(fields: [requisitionId], references: [id])
+  postingId        String?   @db.Uuid // Nullable if candidate was sourced internally
+  posting          JobPosting? @relation(fields: [postingId], references: [id])
+  
+  // State
+  currentStageId   String?   @db.Uuid
+  isRejected       Boolean   @default(false)
+  
+  resumeUrl        String?
+  aiMatchScore     Float?    
+  
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  // Relations
+  transitions      ApplicationTransition[]
+  interviews       Interview[]
+
+  @@unique([candidateId, requisitionId])
+  @@index([requisitionId, currentStageId])
+}
+
+model ApplicationTransition {
+  id               String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  applicationId    String    @db.Uuid
+  application      Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  
+  stageId          String    @db.Uuid
+  stage            WorkflowStage @relation(fields: [stageId], references: [id])
+  
+  notes            String?   @db.Text
+  enteredAt        DateTime  @default(now())
+}
+
+// -----------------------------------------------------------------------------
+// INTERVIEWS & SCORECARDS
+// -----------------------------------------------------------------------------
+
+model Interview {
+  id               String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  applicationId    String    @db.Uuid
+  application      Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  stageId          String    @db.Uuid
+  stage            WorkflowStage @relation(fields: [stageId], references: [id])
+  
+  interviewerId    String    @db.Uuid
+  interviewer      TenantMember @relation("Interviewer", fields: [interviewerId], references: [id])
+  
+  scheduledAt      DateTime
+  durationMinutes  Int
+  meetingUrl       String?
+  
+  scorecard        InterviewScorecard?
+}
+
+model InterviewScorecard {
+  id               String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  interviewId      String    @unique @db.Uuid
+  interview        Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  
+  submittedById    String    @db.Uuid
+  submittedBy      TenantMember @relation(fields: [submittedById], references: [id])
+  
+  overallRating    Int       // 1 (Strong No) to 4 (Strong Yes)
+  feedback         String    @db.Text
+  submittedAt      DateTime  @default(now())
+}
+
+// -----------------------------------------------------------------------------
+// COMPLIANCE & AUDIT (SOC2 Requirement)
+// -----------------------------------------------------------------------------
+
+model AuditLog {
+  id               String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  tenantId         String?   @db.Uuid
+  tenant           Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId           String?   @db.Uuid
+  user             User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  
+  action           String    // e.g., 'REQUISITION_APPROVED', 'CANDIDATE_REJECTED'
+  entityType       String    // e.g., 'JobRequisition', 'Application'
+  entityId         String    @db.Uuid
+  metadata         Json?     // Stores previous/new state of the entity
+  
+  createdAt        DateTime  @default(now())
+
+  @@index([tenantId, entityType, entityId])
+}
