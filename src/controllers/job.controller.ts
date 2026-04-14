@@ -5,39 +5,39 @@ import { z } from 'zod';
 
 const jobService = new JobService();
 
-const createJobSchema = z.object({
-  title: z.string().min(3),
-  description: z.string().min(10),
-  location: z.string()
+const createReqSchema = z.object({
+  internalTitle: z.string().min(3),
+  headcount: z.number().int().positive().default(1),
 });
 
-export const createJob = async (req: Request, res: Response) => {
+export const createRequisition = async (req: Request, res: Response): Promise<void> => {
   try {
-    const parsedData = createJobSchema.parse(req.body);
-    // Assuming auth middleware sets req.user
-    const companyId = req.user.companyId;
+    const parsedData = createReqSchema.parse(req.body);
 
-    const job = await jobService.createJob(
-      companyId,
-      parsedData.title,
-      parsedData.description,
-      parsedData.location
+    // Safety check for auth middleware
+    if (!req.user || !req.user.tenantId) {
+      res.status(401).json({ success: false, error: "Unauthorized: Missing tenant context" });
+      return;
+    }
+
+    const requisition = await jobService.createRequisition(
+      req.user.tenantId,
+      parsedData.internalTitle,
+      parsedData.headcount
     );
-    res.status(201).json({ success: true, data: job });
+
+    res.status(201).json({ success: true, data: requisition });
   } catch (error) {
     res.status(400).json({ success: false, error: "Validation or processing error" });
   }
 };
 
-// ADD THIS NEW FUNCTION:
-export const getActiveJobs = async (req: Request, res: Response) => {
+export const getActiveJobs = async (req: Request, res: Response): Promise<void> => {
   try {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 10;
 
-    const jobs = await jobService.getPaginatedJobs(page, limit);
-
-    // The frontend expects the jobs inside the 'data' property
+    const jobs = await jobService.getPaginatedPublicJobs(page, limit);
     res.status(200).json({ success: true, data: jobs });
   } catch (error) {
     console.error(error);

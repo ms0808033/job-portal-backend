@@ -64,6 +64,10 @@ model User {
   firstName     String
   lastName      String
   systemRole    SystemRole @default(USER)
+
+  googleId      String?   @unique
+  githubId      String?   @unique
+  avatarUrl     String?
   
   // Seeker Profile basics 
   headline      String?
