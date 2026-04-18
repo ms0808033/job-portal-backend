@@ -2,7 +2,7 @@ import { Router } from 'express';
 import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import { Strategy as GitHubStrategy } from 'passport-github2';
-import { handleOAuthLogin } from '../controllers/auth.controller';
+import { handleOAuthLogin, requestOtp, verifyOtpLogin } from '../controllers/auth.controller';
 
 const router = Router();
 
@@ -54,5 +54,7 @@ router.get('/github/callback',
     passport.authenticate('github', { session: false, failureRedirect: '/login' }),
     handleOAuthLogin
 );
+router.post('/otp/send', requestOtp);
+router.post('/otp/verify', verifyOtpLogin);
 
 export default router;

@@ -35,3 +35,59 @@ export const handleOAuthLogin = async (req: Request, res: Response) => {
         res.redirect(`${FRONTEND_URL}/auth?error=oauth_failed`);
     }
 };
+
+import { OtpService } from '../services/otp.service';
+import prisma from '../lib/prisma';
+
+const otpService = new OtpService();
+
+export const requestOtp = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { email } = req.body;
+        if (!email) {
+            res.status(400).json({ success: false, error: "Email is required" });
+            return;
+        }
+
+        await otpService.generateAndSendOtp(email);
+        res.status(200).json({ success: true, message: "OTP sent successfully" });
+    } catch (error) {
+        console.error("OTP Send Error:", error);
+        res.status(500).json({ success: false, error: "Failed to send OTP" });
+    }
+};
+
+export const verifyOtpLogin = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { email, token, role } = req.body;
+
+        // 1. Verify the code
+        const isValid = await otpService.verifyOtp(email, token);
+        if (!isValid) {
+            res.status(401).json({ success: false, error: "Invalid or expired code" });
+            return;
+        }
+
+        // 2. Check if user exists, if not, create them (Signup)
+        let user = await prisma.user.findUnique({ where: { email } });
+
+        if (!user) {
+            user = await prisma.user.create({
+                data: {
+                    email,
+                    firstName: email.split('@')[0], // Give them a placeholder name
+                    lastName: '',
+                    systemRole: 'USER'
+                }
+            });
+        }
+
+        // 3. Generate JWT and send it back
+        const jwtToken = generateToken(user, role || 'SEEKER');
+        res.status(200).json({ success: true, token: jwtToken });
+
+    } catch (error) {
+        console.error("OTP Verification Error:", error);
+        res.status(500).json({ success: false, error: "Verification failed" });
+    }
+};

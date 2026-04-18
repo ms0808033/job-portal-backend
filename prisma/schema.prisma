@@ -317,3 +317,14 @@ model AuditLog {
 
   @@index([tenantId, entityType, entityId])
 }
+
+model VerificationToken {
+  id        String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  email     String
+  token     String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  // Ensure a user can't have duplicate identical tokens
+  @@unique([email, token])
+}
